@@ -64,3 +64,15 @@ def analyze():
 if __name__ == '__main__':
     # 外部からのアクセスを許可
     app.run(debug=True, host='0.0.0.0', port=5000)
+
+    # app.py に追加
+import os
+from flask import send_from_directory
+
+@app.route('/static/<path:path>')
+def send_static(path):
+    return send_from_directory('static', path)
+
+@app.route('/manifest.json')
+def manifest():
+    return send_from_directory('static', 'manifest.json')
