@@ -1,14 +1,32 @@
 # 白髪トラッカー (White Hair Tracker)
 
-AI画像解析を用いて、カメラで撮影した髪の毛から白髪率を算出・記録するWebアプリです。
+カメラで撮影した髪の毛から白髪率を算出・記録するWebアプリです。
 
-## 特徴
-- **画像解析**: OpenCVを使用した適応型しきい値処理による白髪検出。
-- **履歴管理**: 解析結果をブラウザのLocalStorageに保存し、推移をグラフ表示。
-- **レスポンシブ**: PC・スマホの両方に対応。
+## オンラインで使う（GitHub Pages）
 
-## 使い方
+**https://nobu5129maki-crypto.github.io/white-hair-tracker/** にアクセスするだけですぐ使えます。
+
+- サーバー不要・ブラウザだけで動作
+- スマホのホーム画面に追加してアプリのように利用可能
+
+## ローカルで動かす（Flask版）
+
 1. Python 3.x をインストール
-2. `pip install flask opencv-python numpy` でライブラリをインストール
+2. `pip install -r requirements.txt`
 3. `python app.py` を実行
-4. ブラウザで `http://localhost:5000` にアクセス
+4. ブラウザで `http://localhost:10000` にアクセス
+
+## GitHub Pages へのデプロイ
+
+1. **アイコンを生成**（初回のみ）:
+   ```bash
+   pip install opencv-python-headless numpy
+   python create_gh_icon.py
+   ```
+2. このリポジトリをGitHubにプッシュ
+3. リポジトリの **Settings** → **Pages**
+4. **Source** で `Deploy from a branch` を選択
+5. **Branch** で `main`、**Folder** で `/docs` を選択
+6. **Save** で保存
+
+数分後に https://nobu5129maki-crypto.github.io/white-hair-tracker/ で公開されます。
