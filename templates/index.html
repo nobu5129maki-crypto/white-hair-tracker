@@ -1,14 +1,16 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" style="background:#121212">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-     <link rel="manifest" href="static/manifest.json">
-<link rel="apple-touch-icon" href="/static/icon-512.png">
-<meta name="theme-color" content="#121212">
-<meta name="apple-mobile-web-app-capable" content="yes">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" href="/icon-512.png">
+    <link rel="apple-touch-startup-image" href="/splash.png">
+    <meta name="theme-color" content="#121212">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>白髪トラッカー</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <style>
         body { font-family: -apple-system, sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
         .container { max-width: 400px; margin: auto; background: #1e1e1e; padding: 25px; border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
@@ -48,14 +50,26 @@
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
 <script>
     const input = document.getElementById('camera-input');
     const loading = document.getElementById('loading');
     const resultDisplay = document.getElementById('result-display');
     let myChart;
 
-    // 起動時にグラフを表示
-    window.onload = updateChart;
+    // 起動時にグラフを表示（Chart.js読み込み後に実行）
+    function init() {
+        if (typeof Chart !== 'undefined') {
+            updateChart();
+        } else {
+            setTimeout(init, 50);
+        }
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
 
     input.onchange = async (e) => {
         const file = e.target.files[0];
