@@ -1,32 +1,22 @@
-# 白髪トラッカー (White Hair Tracker)
+# 白髪トラッカー
 
-カメラで撮影した髪の毛から白髪率を算出・記録するWebアプリです。
+**https://nobu5129maki-crypto.github.io/white-hair-tracker/** にアクセスするだけで使えます。
 
-## オンラインで使う（GitHub Pages）
+## GitHub Pages の設定（重要）
 
-**https://nobu5129maki-crypto.github.io/white-hair-tracker/** にアクセスするだけですぐ使えます。
+アクセス時にアプリが表示されるには、**Folder を `/(root)` に設定**してください。
 
-- サーバー不要・ブラウザだけで動作
-- スマホのホーム画面に追加してアプリのように利用可能
+1. リポジトリの **Settings** → **Pages**
+2. **Source**: `Deploy from a branch`
+3. **Branch**: `main`
+4. **Folder**: `/(root)` を選択（`/docs` ではない）
+5. **Save**
 
 ## ローカルで動かす（Flask版）
 
-1. Python 3.x をインストール
-2. `pip install -r requirements.txt`
-3. `python app.py` を実行
-4. ブラウザで `http://localhost:10000` にアクセス
+```bash
+pip install -r requirements.txt
+python app.py
+```
 
-## GitHub Pages へのデプロイ
-
-1. **アイコンを生成**（初回のみ）:
-   ```bash
-   pip install opencv-python-headless numpy
-   python create_gh_icon.py
-   ```
-2. このリポジトリをGitHubにプッシュ
-3. リポジトリの **Settings** → **Pages**
-4. **Source** で `Deploy from a branch` を選択
-5. **Branch** で `main`、**Folder** で `/docs` を選択
-6. **Save** で保存
-
-数分後に https://nobu5129maki-crypto.github.io/white-hair-tracker/ で公開されます。
+`http://localhost:10000` にアクセス

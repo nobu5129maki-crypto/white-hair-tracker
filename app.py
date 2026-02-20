@@ -2,9 +2,10 @@ import os
 import io
 import cv2
 import numpy as np
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
+from flask import Flask, request, jsonify, send_from_directory, send_file
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+app = Flask(__name__, static_folder='static')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def _create_icon_png():
     """アイコンをOpenCVで生成（髪＋グラフのデザイン）"""
@@ -32,20 +33,15 @@ def _create_icon_png():
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return send_from_directory(BASE_DIR, 'index.html')
 
 @app.route('/icon-512.png')
 def icon_png():
-    """PWAアイコン（初回は生成してstaticに保存）"""
-    static_path = os.path.join(app.static_folder, 'icon-512.png')
-    if os.path.exists(static_path):
-        return send_from_directory(app.static_folder, 'icon-512.png')
+    """PWAアイコン"""
+    root_icon = os.path.join(BASE_DIR, 'icon-512.png')
+    if os.path.exists(root_icon):
+        return send_from_directory(BASE_DIR, 'icon-512.png')
     png_data = _create_icon_png()
-    try:
-        with open(static_path, 'wb') as f:
-            f.write(png_data)
-    except OSError:
-        pass
     return send_file(io.BytesIO(png_data), mimetype='image/png', max_age=86400)
 
 @app.route('/splash.png')
@@ -98,7 +94,7 @@ def analyze():
 
 @app.route('/manifest.json')
 def manifest():
-    return send_from_directory('static', 'manifest.json')
+    return send_from_directory(BASE_DIR, 'manifest.json')
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
