@@ -2,6 +2,3 @@ flask
 opencv-python-headless
 numpy
 gunicorn
-svglib
-reportlab
-Pillow
