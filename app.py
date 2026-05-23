@@ -7,6 +7,54 @@ from flask import Flask, request, jsonify, send_from_directory, send_file
 app = Flask(__name__, static_folder='static')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+def _analyze_white_hair_ratio(img):
+    """中心ROI内の髪画素のみを対象に、Otsu適応閾値で白髪率を算出する。"""
+    h, w = img.shape[:2]
+    scale = min(640 / w, 640 / h)
+    if scale < 1:
+        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+        h, w = img.shape[:2]
+
+    roi_y1, roi_y2 = int(h * 0.15), int(h * 0.70)
+    roi_x1, roi_x2 = int(w * 0.125), int(w * 0.875)
+    roi = img[roi_y1:roi_y2, roi_x1:roi_x2]
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    hue, sat, val = cv2.split(hsv)
+
+    skin = (hue <= 25) & (sat >= 25) & (sat <= 165) & (val >= 75) & (val <= 230)
+    hair_mask = (sat <= 102) & ~skin
+
+    v_values = val[hair_mask]
+    if len(v_values) < 100:
+        return 0.0
+
+    hist = cv2.calcHist([v_values], [0], None, [256], [0, 256]).flatten()
+    total = len(v_values)
+    sum_all = sum(i * hist[i] for i in range(256))
+    sum_b, w_b, max_var, threshold = 0, 0, 0, 128
+    for t in range(256):
+        w_b += hist[t]
+        if w_b == 0:
+            continue
+        w_f = total - w_b
+        if w_f == 0:
+            break
+        sum_b += t * hist[t]
+        m_b = sum_b / w_b
+        m_f = (sum_all - sum_b) / w_f
+        var_between = w_b * w_f * (m_b - m_f) ** 2
+        if var_between > max_var:
+            max_var = var_between
+            threshold = t
+
+    white = hair_mask & (val >= threshold)
+    dark = hair_mask & (val < threshold)
+    hair_total = int(white.sum()) + int(dark.sum())
+    if hair_total == 0:
+        return 0.0
+    return round(int(white.sum()) / hair_total * 100, 1)
+
 def _create_icon_png():
     """アイコンをOpenCVで生成（髪＋グラフのデザイン）"""
     def bezier(p0, p1, p2, n=30):
@@ -81,13 +129,7 @@ def analyze():
         if img is None:
             return jsonify({'error': '画像を読み込めません。JPEGまたはPNG形式で撮影してください'}), 400
 
-        img = cv2.resize(img, (640, 480))
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, white_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-        white_pixels = cv2.countNonZero(white_mask)
-        total_pixels = img.shape[0] * img.shape[1]
-        ratio = round((white_pixels / total_pixels) * 100, 1)
-
+        ratio = _analyze_white_hair_ratio(img)
         return jsonify({'ratio': ratio})
     except Exception as e:
         return jsonify({'error': f'処理中にエラーが発生しました: {str(e)}'}), 500

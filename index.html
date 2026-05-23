@@ -59,6 +59,7 @@
             <strong>撮影のコツ</strong>
             <ul>
                 <li><strong>髪を広げる：</strong>分け目や全体が分かるように</li>
+                <li><strong>画面中央に髪を配置：</strong>解析は中央エリアのみを使用します</li>
                 <li><strong>距離を一定に：</strong>毎回同じ距離で撮ると推移が正確に</li>
                 <li><strong>背景はシンプルに：</strong>髪以外の白い部分が写り込まないように</li>
             </ul>
@@ -89,6 +90,48 @@
     const resultDisplay = document.getElementById('result-display');
     let myChart;
 
+    function rgbToHsv(r, g, b) {
+        r /= 255; g /= 255; b /= 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        const d = max - min;
+        let h = 0;
+        const s = max === 0 ? 0 : (d / max) * 100;
+        const v = max * 100;
+        if (d > 0) {
+            if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+            else if (max === g) h = ((b - r) / d + 2) / 6;
+            else h = ((r - g) / d + 4) / 6;
+        }
+        return { h: h * 360, s, v };
+    }
+
+    function isSkin(h, s, v) {
+        return h <= 50 && s >= 10 && s <= 65 && v >= 30 && v <= 90;
+    }
+
+    function otsuThreshold(hist, total) {
+        let sum = 0;
+        for (let i = 0; i < 256; i++) sum += i * hist[i];
+        let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
+        for (let t = 0; t < 256; t++) {
+            wB += hist[t];
+            if (wB === 0) continue;
+            const wF = total - wB;
+            if (wF === 0) break;
+            sumB += t * hist[t];
+            const mB = sumB / wB;
+            const mF = (sum - sumB) / wF;
+            const varBetween = wB * wF * (mB - mF) ** 2;
+            if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
+        }
+        return threshold;
+    }
+
+    function isHairCandidate(h, s, v) {
+        if (isSkin(h, s, v)) return false;
+        return s <= 40;
+    }
+
     function analyzeImage(file) {
         return new Promise((resolve, reject) => {
             const img = new Image();
@@ -99,20 +142,54 @@
                 const ctx = canvas.getContext('2d');
                 const maxSize = 640;
                 const scale = Math.min(maxSize / img.width, maxSize / img.height);
-                canvas.width = Math.floor(img.width * scale);
-                canvas.height = Math.floor(img.height * scale);
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const pixels = data.data;
-                let whiteCount = 0;
-                const threshold = 200;
-                for (let i = 0; i < pixels.length; i += 4) {
-                    if (pixels[i] >= threshold && pixels[i+1] >= threshold && pixels[i+2] >= threshold) {
-                        whiteCount++;
+                const w = Math.floor(img.width * scale);
+                const h = Math.floor(img.height * scale);
+                canvas.width = w;
+                canvas.height = h;
+                ctx.drawImage(img, 0, 0, w, h);
+                const pixels = ctx.getImageData(0, 0, w, h).data;
+
+                const roiX = Math.floor(w * 0.125);
+                const roiY = Math.floor(h * 0.15);
+                const roiW = Math.floor(w * 0.75);
+                const roiH = Math.floor(h * 0.55);
+
+                const hist = new Array(256).fill(0);
+                let hairSamples = 0;
+
+                for (let y = roiY; y < roiY + roiH; y++) {
+                    for (let x = roiX; x < roiX + roiW; x++) {
+                        const i = (y * w + x) * 4;
+                        const { h: hue, s, v } = rgbToHsv(pixels[i], pixels[i + 1], pixels[i + 2]);
+                        if (!isHairCandidate(hue, s, v)) continue;
+                        hist[Math.min(255, Math.round(v * 2.55))]++;
+                        hairSamples++;
                     }
                 }
-                const total = canvas.width * canvas.height;
-                const ratio = Math.round((whiteCount / total) * 1000) / 10;
+
+                if (hairSamples < 100) {
+                    resolve(0);
+                    return;
+                }
+
+                const threshold = otsuThreshold(hist, hairSamples);
+                let whiteCount = 0;
+                let darkCount = 0;
+
+                for (let y = roiY; y < roiY + roiH; y++) {
+                    for (let x = roiX; x < roiX + roiW; x++) {
+                        const i = (y * w + x) * 4;
+                        const { h: hue, s, v } = rgbToHsv(pixels[i], pixels[i + 1], pixels[i + 2]);
+                        if (!isHairCandidate(hue, s, v)) continue;
+                        if (Math.round(v * 2.55) >= threshold) whiteCount++;
+                        else darkCount++;
+                    }
+                }
+
+                const hairTotal = whiteCount + darkCount;
+                const ratio = hairTotal > 0
+                    ? Math.round((whiteCount / hairTotal) * 1000) / 10
+                    : 0;
                 resolve(ratio);
             };
             img.onerror = () => {

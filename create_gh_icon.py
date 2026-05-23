@@ -25,7 +25,6 @@ for c in [(120, 400), (180, 320), (250, 360), (320, 280), (400, 220)]:
     cv2.circle(img, c, 10, (197, 209, 79), -1)
 
 base = os.path.dirname(os.path.abspath(__file__))
-out = os.path.join(base, 'docs', 'icon-512.png')
-os.makedirs(os.path.dirname(out), exist_ok=True)
+out = os.path.join(base, 'icon-512.png')
 cv2.imwrite(out, img)
 print(f"Created: {out}")
