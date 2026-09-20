@@ -7,6 +7,11 @@ from flask import Flask, request, jsonify, send_from_directory, send_file
 app = Flask(__name__, static_folder='static')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 白髪判定のパラメータ（index.html 側と同じ値）
+WHITE_V_MIN = 150          # 髪色が一様なときの白髪しきい値（明度 0〜255）
+MIN_CLASS_SEPARATION = 60  # Otsu の2クラス平均差がこれ未満なら一様とみなす
+OTSU_MIN, OTSU_MAX = 120, 180
+
 def _analyze_white_hair_ratio(img):
     """中心ROI内の髪画素のみを対象に、Otsu適応閾値で白髪率を算出する。"""
     h, w = img.shape[:2]
@@ -33,6 +38,7 @@ def _analyze_white_hair_ratio(img):
     total = len(v_values)
     sum_all = sum(i * hist[i] for i in range(256))
     sum_b, w_b, max_var, threshold = 0, 0, 0, 128
+    mean_dark, mean_light = 0.0, 0.0
     for t in range(256):
         w_b += hist[t]
         if w_b == 0:
@@ -47,6 +53,15 @@ def _analyze_white_hair_ratio(img):
         if var_between > max_var:
             max_var = var_between
             threshold = t
+            mean_dark, mean_light = m_b, m_f
+
+    # Otsu は必ず2クラスに分けるため、真っ黒な髪でも半分が「白髪」になってしまう。
+    # クラス平均の差が小さい（髪色が一様）ときは絶対基準を使い、大きいときだけ Otsu を妥当な範囲で使う。
+    # index.html の decideThreshold と同じロジック。
+    if mean_light - mean_dark < MIN_CLASS_SEPARATION:
+        threshold = WHITE_V_MIN
+    else:
+        threshold = min(OTSU_MAX, max(OTSU_MIN, threshold))
 
     white = hair_mask & (val >= threshold)
     dark = hair_mask & (val < threshold)

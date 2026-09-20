@@ -40,7 +40,7 @@
     
     <label class="btn">
         📷 今日の状態を判定
-        <input type="file" accept="image/*" capture="camera" id="camera-input">
+        <input type="file" accept="image/*" capture="environment" id="camera-input">
     </label>
 
     <div class="tips-toggle" id="tips-toggle" role="button" tabindex="0" aria-expanded="false">
@@ -109,10 +109,21 @@
         return h <= 50 && s >= 10 && s <= 65 && v >= 30 && v <= 90;
     }
 
+    // 白髪判定の明度しきい値（0〜255）。Otsu が使えない（髪色が一様な）場合に使う絶対基準
+    const WHITE_V_MIN = 150;
+    // Otsu で2クラスに分けたとき、クラス平均の差がこれ未満なら「一様な髪色」とみなす
+    const MIN_CLASS_SEPARATION = 60;
+    // Otsu のしきい値として妥当な範囲（暗い髪 / 白髪の境目として現実的な明度）
+    const OTSU_MIN = 120, OTSU_MAX = 180;
+    // 髪として検出できた画素がこれ未満なら判定不能
+    const MIN_HAIR_SAMPLES = 100;
+    // これ未満なら結果は出すが「髪の領域が小さい」と注意を出す
+    const LOW_HAIR_SAMPLES = 3000;
+
     function otsuThreshold(hist, total) {
         let sum = 0;
         for (let i = 0; i < 256; i++) sum += i * hist[i];
-        let sumB = 0, wB = 0, maxVar = 0, threshold = 128;
+        let sumB = 0, wB = 0, maxVar = 0, threshold = 128, bestMB = 0, bestMF = 0;
         for (let t = 0; t < 256; t++) {
             wB += hist[t];
             if (wB === 0) continue;
@@ -122,9 +133,21 @@
             const mB = sumB / wB;
             const mF = (sum - sumB) / wF;
             const varBetween = wB * wF * (mB - mF) ** 2;
-            if (varBetween > maxVar) { maxVar = varBetween; threshold = t; }
+            if (varBetween > maxVar) { maxVar = varBetween; threshold = t; bestMB = mB; bestMF = mF; }
         }
-        return threshold;
+        return { threshold, meanDark: bestMB, meanLight: bestMF };
+    }
+
+    /**
+     * 白髪/黒髪を分ける明度しきい値を決める。
+     * Otsu 法は必ず2クラスに分けてしまうため、真っ黒な髪でも半分近くが「白髪」と判定されていた。
+     * クラス間の差が小さい（髪色が一様）ときは絶対基準 WHITE_V_MIN を使い、
+     * 差が大きいときだけ Otsu の値を妥当な範囲に丸めて使う。
+     */
+    function decideThreshold(hist, total) {
+        const { threshold, meanDark, meanLight } = otsuThreshold(hist, total);
+        if (meanLight - meanDark < MIN_CLASS_SEPARATION) return WHITE_V_MIN;
+        return Math.min(OTSU_MAX, Math.max(OTSU_MIN, threshold));
     }
 
     function isHairCandidate(h, s, v) {
@@ -167,12 +190,13 @@
                     }
                 }
 
-                if (hairSamples < 100) {
-                    resolve(0);
+                if (hairSamples < MIN_HAIR_SAMPLES) {
+                    // 以前は 0% として保存していたが、判定不能なので結果を出さずエラーにする
+                    reject(new Error('髪を検出できませんでした。髪が画面中央に大きく写るように撮り直してください'));
                     return;
                 }
 
-                const threshold = otsuThreshold(hist, hairSamples);
+                const threshold = decideThreshold(hist, hairSamples);
                 let whiteCount = 0;
                 let darkCount = 0;
 
@@ -190,7 +214,7 @@
                 const ratio = hairTotal > 0
                     ? Math.round((whiteCount / hairTotal) * 1000) / 10
                     : 0;
-                resolve(ratio);
+                resolve({ ratio, hairSamples });
             };
             img.onerror = () => {
                 URL.revokeObjectURL(url);
@@ -217,13 +241,17 @@
 
     input.onchange = async (e) => {
         const file = e.target.files[0];
+        // 同じ写真を続けて選んでも onchange が発火するようにリセット
+        e.target.value = '';
         if (!file) return;
         loading.style.display = 'block';
         resultDisplay.style.display = 'none';
         try {
-            const ratio = await analyzeImage(file);
+            const { ratio, hairSamples } = await analyzeImage(file);
             document.getElementById('ratio').innerText = ratio;
-            document.getElementById('advice').innerText = '';
+            document.getElementById('advice').innerText = hairSamples < LOW_HAIR_SAMPLES
+                ? '髪の領域が小さめです。もう少し近づいて撮ると精度が上がります'
+                : '';
             resultDisplay.style.display = 'block';
             saveData(ratio);
         } catch (err) {
