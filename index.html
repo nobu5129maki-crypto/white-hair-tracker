@@ -2,7 +2,7 @@
 <html lang="ja" style="background:#121212">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <link rel="manifest" href="manifest.json">
     <link rel="apple-touch-icon" href="icon-512.png">
     <meta name="theme-color" content="#121212">
@@ -11,11 +11,12 @@
     <title>白髪トラッカー</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <style>
-        body { font-family: -apple-system, sans-serif; background: #121212; color: white; text-align: center; padding: 20px; }
-        .container { max-width: 400px; margin: auto; background: #1e1e1e; padding: 25px; border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        *, *::before, *::after { box-sizing: border-box; }
+        body { font-family: -apple-system, sans-serif; background: #121212; color: white; text-align: center; margin: 0; padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); }
+        .container { width: 100%; max-width: 400px; margin: 0 auto; background: #1e1e1e; padding: 25px; border-radius: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
         .result-area { font-size: 2.5rem; color: #4fd1c5; margin: 20px 0; font-weight: bold; }
-        .btn { background: #4fd1c5; color: #121212; padding: 18px; border-radius: 15px; cursor: pointer; display: block; font-weight: bold; margin-bottom: 20px; text-decoration: none; }
-        input[type="file"] { display: none; }
+        .btn { position: relative; overflow: hidden; background: #4fd1c5; color: #121212; padding: 18px; border-radius: 15px; cursor: pointer; display: block; font-weight: bold; margin-bottom: 20px; text-decoration: none; }
+        .btn input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; font-size: 16px; }
         .card { background: #2d2d2d; border-radius: 20px; padding: 15px; margin-top: 20px; }
         .chart-container { margin-top: 20px; height: 200px; }
         .loading { display: none; color: #4fd1c5; font-weight: bold; margin: 10px; }
@@ -40,14 +41,14 @@
     
     <label class="btn">
         📷 今日の状態を判定
-        <input type="file" accept="image/*" capture="environment" id="camera-input">
+        <input type="file" accept="image/*" id="camera-input" aria-label="髪の写真を選んで今日の状態を判定">
     </label>
 
     <div class="tips-toggle" id="tips-toggle" role="button" tabindex="0" aria-expanded="false">
         <span>💡 より正確に解析するためのコツ</span>
         <span class="icon">▼</span>
     </div>
-    <div class="tips-content" id="tips-content">
+    <div class="tips-content" id="tips-content" aria-hidden="true">
         <div class="tips-inner">
             <strong>照明の条件</strong>
             <ul>
@@ -79,11 +80,11 @@
         <div class="chart-container">
             <canvas id="historyChart"></canvas>
         </div>
-        <button onclick="clearData()" style="background:none; border:none; color:#666; font-size:0.7rem; margin-top:10px;">履歴をリセット</button>
+        <button type="button" onclick="clearData()" style="background:none; border:none; color:#666; font-size:0.7rem; margin-top:10px;">履歴をリセット</button>
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.1" defer></script>
 <script>
     const input = document.getElementById('camera-input');
     const loading = document.getElementById('loading');
@@ -119,6 +120,12 @@
     const MIN_HAIR_SAMPLES = 100;
     // これ未満なら結果は出すが「髪の領域が小さい」と注意を出す
     const LOW_HAIR_SAMPLES = 3000;
+    // 近傍の明度のばらつきがこれ未満なら、毛筋のない平坦な背景とみなす（0〜255）
+    const TEXTURE_RADIUS = 3;
+    const TEXTURE_STD_MIN = 4;
+    // 平坦な画素が候補のこの割合以上なら、背景を除外したことを知らせる
+    const FLAT_WARN_RATIO = 0.35;
+    const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
     function otsuThreshold(hist, total) {
         let sum = 0;
@@ -157,64 +164,19 @@
 
     function analyzeImage(file) {
         return new Promise((resolve, reject) => {
+            if (file.size > MAX_IMAGE_BYTES) {
+                reject(new Error('画像が大きすぎます。25MB以下の写真を選んでください'));
+                return;
+            }
             const img = new Image();
             const url = URL.createObjectURL(file);
             img.onload = () => {
                 URL.revokeObjectURL(url);
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                const maxSize = 640;
-                const scale = Math.min(maxSize / img.width, maxSize / img.height);
-                const w = Math.floor(img.width * scale);
-                const h = Math.floor(img.height * scale);
-                canvas.width = w;
-                canvas.height = h;
-                ctx.drawImage(img, 0, 0, w, h);
-                const pixels = ctx.getImageData(0, 0, w, h).data;
-
-                const roiX = Math.floor(w * 0.125);
-                const roiY = Math.floor(h * 0.15);
-                const roiW = Math.floor(w * 0.75);
-                const roiH = Math.floor(h * 0.55);
-
-                const hist = new Array(256).fill(0);
-                let hairSamples = 0;
-
-                for (let y = roiY; y < roiY + roiH; y++) {
-                    for (let x = roiX; x < roiX + roiW; x++) {
-                        const i = (y * w + x) * 4;
-                        const { h: hue, s, v } = rgbToHsv(pixels[i], pixels[i + 1], pixels[i + 2]);
-                        if (!isHairCandidate(hue, s, v)) continue;
-                        hist[Math.min(255, Math.round(v * 2.55))]++;
-                        hairSamples++;
-                    }
+                try {
+                    resolve(measureWhiteHair(img));
+                } catch (err) {
+                    reject(err instanceof Error ? err : new Error('解析に失敗しました'));
                 }
-
-                if (hairSamples < MIN_HAIR_SAMPLES) {
-                    // 以前は 0% として保存していたが、判定不能なので結果を出さずエラーにする
-                    reject(new Error('髪を検出できませんでした。髪が画面中央に大きく写るように撮り直してください'));
-                    return;
-                }
-
-                const threshold = decideThreshold(hist, hairSamples);
-                let whiteCount = 0;
-                let darkCount = 0;
-
-                for (let y = roiY; y < roiY + roiH; y++) {
-                    for (let x = roiX; x < roiX + roiW; x++) {
-                        const i = (y * w + x) * 4;
-                        const { h: hue, s, v } = rgbToHsv(pixels[i], pixels[i + 1], pixels[i + 2]);
-                        if (!isHairCandidate(hue, s, v)) continue;
-                        if (Math.round(v * 2.55) >= threshold) whiteCount++;
-                        else darkCount++;
-                    }
-                }
-
-                const hairTotal = whiteCount + darkCount;
-                const ratio = hairTotal > 0
-                    ? Math.round((whiteCount / hairTotal) * 1000) / 10
-                    : 0;
-                resolve({ ratio, hairSamples });
             };
             img.onerror = () => {
                 URL.revokeObjectURL(url);
@@ -224,19 +186,132 @@
         });
     }
 
-    function init() {
-        if (typeof Chart !== 'undefined') updateChart();
-        else setTimeout(init, 50);
-    }
-    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-    else init();
+    /**
+     * 画面中央の髪候補から白髪率を出す。
+     * 白い壁のように平坦な領域は白髪と区別できないため、毛筋（明度のばらつき）がある画素だけを使う。
+     * 毛筋がほぼ無い写真は、以前は白い壁を白髪100%と保存していたので、結果を出さずエラーにする。
+     */
+    function measureWhiteHair(img) {
+        if (!img.width || !img.height) {
+            throw new Error('画像を読み込めません。JPEGまたはPNG形式で撮影してください');
+        }
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        // 小さい写真を引き伸ばすと、わずかしか写っていない髪を十分な量と誤認する
+        const scale = Math.min(1, 640 / img.width, 640 / img.height);
+        const w = Math.max(1, Math.floor(img.width * scale));
+        const h = Math.max(1, Math.floor(img.height * scale));
+        canvas.width = w;
+        canvas.height = h;
+        ctx.drawImage(img, 0, 0, w, h);
+        const pixels = ctx.getImageData(0, 0, w, h).data;
 
-    document.getElementById('tips-toggle').addEventListener('click', () => {
-        document.getElementById('tips-toggle').classList.toggle('open');
-        document.getElementById('tips-content').classList.toggle('open');
-    });
+        const luma = new Float32Array(w * h);
+        const cand = new Uint8Array(w * h);
+        for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+            const hsv = rgbToHsv(pixels[i], pixels[i + 1], pixels[i + 2]);
+            luma[p] = Math.min(255, Math.round(hsv.v * 2.55));
+            cand[p] = isHairCandidate(hsv.h, hsv.s, hsv.v) ? 1 : 0;
+        }
+
+        const rad = TEXTURE_RADIUS;
+        const iw = w + 1;
+        const integral = new Float64Array((w + 1) * (h + 1));
+        const integralSq = new Float64Array((w + 1) * (h + 1));
+        for (let y = 1; y <= h; y++) {
+            for (let x = 1; x <= w; x++) {
+                const v = luma[(y - 1) * w + (x - 1)];
+                const idx = y * iw + x;
+                const up = (y - 1) * iw + x;
+                const left = y * iw + (x - 1);
+                const diag = (y - 1) * iw + (x - 1);
+                integral[idx] = v + integral[up] + integral[left] - integral[diag];
+                integralSq[idx] = v * v + integralSq[up] + integralSq[left] - integralSq[diag];
+            }
+        }
+
+        function stdAt(x, y) {
+            const x1 = Math.max(0, x - rad);
+            const y1 = Math.max(0, y - rad);
+            const x2 = Math.min(w - 1, x + rad);
+            const y2 = Math.min(h - 1, y + rad);
+            const a = y1 * iw + x1;
+            const b = y1 * iw + (x2 + 1);
+            const c = (y2 + 1) * iw + x1;
+            const e = (y2 + 1) * iw + (x2 + 1);
+            const n = (x2 - x1 + 1) * (y2 - y1 + 1);
+            const sum = integral[e] - integral[b] - integral[c] + integral[a];
+            const sumSq = integralSq[e] - integralSq[b] - integralSq[c] + integralSq[a];
+            const mean = sum / n;
+            return Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+        }
+
+        const roiX = Math.floor(w * 0.125);
+        const roiY = Math.floor(h * 0.15);
+        const roiW = Math.floor(w * 0.75);
+        const roiH = Math.floor(h * 0.55);
+        const histAll = new Array(256).fill(0);
+        const histTex = new Array(256).fill(0);
+        let allCount = 0;
+        let texCount = 0;
+
+        for (let y = roiY; y < roiY + roiH; y++) {
+            for (let x = roiX; x < roiX + roiW; x++) {
+                const p = y * w + x;
+                if (!cand[p]) continue;
+                const v = luma[p];
+                histAll[v]++;
+                allCount++;
+                if (stdAt(x, y) >= TEXTURE_STD_MIN) {
+                    histTex[v]++;
+                    texCount++;
+                }
+            }
+        }
+
+        if (allCount < MIN_HAIR_SAMPLES) {
+            throw new Error('髪を検出できませんでした。髪が画面中央に大きく写るように撮り直してください');
+        }
+        if (texCount < MIN_HAIR_SAMPLES && texCount * 20 < allCount) {
+            throw new Error('髪の質感を検出できませんでした。毛筋が分かる明るさで、画面中央に髪を大きく撮ってください');
+        }
+
+        const useTexture = texCount >= MIN_HAIR_SAMPLES;
+        const hist = useTexture ? histTex : histAll;
+        const hairSamples = useTexture ? texCount : allCount;
+        const threshold = decideThreshold(hist, hairSamples);
+        let whiteCount = 0;
+        for (let i = threshold; i < 256; i++) whiteCount += hist[i];
+        const flatCount = allCount - texCount;
+        return {
+            ratio: Math.round((whiteCount / hairSamples) * 1000) / 10,
+            hairSamples,
+            flatExcluded: useTexture && flatCount / allCount >= FLAT_WARN_RATIO
+        };
+    }
+
+    function init(attempt) {
+        if (typeof Chart !== 'undefined') {
+            updateChart();
+            return;
+        }
+        if ((attempt || 0) > 40) return;
+        setTimeout(() => init((attempt || 0) + 1), 50);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => init(0));
+    else init(0);
+
+    function toggleTips() {
+        const toggle = document.getElementById('tips-toggle');
+        const content = document.getElementById('tips-content');
+        const open = toggle.classList.toggle('open');
+        content.classList.toggle('open', open);
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        content.setAttribute('aria-hidden', open ? 'false' : 'true');
+    }
+    document.getElementById('tips-toggle').addEventListener('click', toggleTips);
     document.getElementById('tips-toggle').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.getElementById('tips-toggle').click(); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTips(); }
     });
 
     input.onchange = async (e) => {
@@ -247,11 +322,11 @@
         loading.style.display = 'block';
         resultDisplay.style.display = 'none';
         try {
-            const { ratio, hairSamples } = await analyzeImage(file);
+            const { ratio, hairSamples, flatExcluded } = await analyzeImage(file);
             document.getElementById('ratio').innerText = ratio;
             document.getElementById('advice').innerText = hairSamples < LOW_HAIR_SAMPLES
                 ? '髪の領域が小さめです。もう少し近づいて撮ると精度が上がります'
-                : '';
+                : (flatExcluded ? '平坦な背景は除外して計算しました。髪を画面いっぱいに撮ると、より安定します' : '');
             resultDisplay.style.display = 'block';
             saveData(ratio);
         } catch (err) {
@@ -261,18 +336,36 @@
         }
     };
 
+    function loadHistory() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem('hairHistory') || '[]');
+            if (!Array.isArray(parsed)) throw new Error('invalid');
+            return parsed
+                .filter((item) => item && Number.isFinite(Number(item.ratio)) && typeof item.date === 'string')
+                .map((item) => ({ date: item.date, ratio: Number(item.ratio) }));
+        } catch (err) {
+            localStorage.removeItem('hairHistory');
+            return [];
+        }
+    }
+
     function saveData(ratio) {
-        let history = JSON.parse(localStorage.getItem('hairHistory') || '[]');
+        const history = loadHistory();
         const now = new Date();
-        history.push({ date: (now.getMonth() + 1) + '/' + now.getDate(), ratio: ratio });
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        const ss = String(now.getSeconds()).padStart(2, '0');
+        history.push({ date: (now.getMonth() + 1) + '/' + now.getDate() + ' ' + hh + ':' + mm + ':' + ss, ratio: ratio });
         if (history.length > 10) history.shift();
         localStorage.setItem('hairHistory', JSON.stringify(history));
         updateChart();
     }
 
     function updateChart() {
-        const history = JSON.parse(localStorage.getItem('hairHistory') || '[]');
-        const ctx = document.getElementById('historyChart').getContext('2d');
+        const history = loadHistory();
+        const canvas = document.getElementById('historyChart');
+        if (!canvas || typeof Chart === 'undefined') return;
+        const ctx = canvas.getContext('2d');
         if (myChart) myChart.destroy();
         myChart = new Chart(ctx, {
             type: 'line',
@@ -284,15 +377,21 @@
                     borderColor: '#4fd1c5',
                     backgroundColor: 'rgba(79, 209, 197, 0.2)',
                     tension: 0.4,
-                    fill: true
+                    fill: true,
+                    pointRadius: 3
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
                 scales: {
-                    y: { beginAtZero: true, grid: { color: '#333' }, ticks: { color: '#aaa' } },
-                    x: { grid: { display: false }, ticks: { color: '#aaa' } }
+                    y: {
+                        min: 0,
+                        max: 100,
+                        grid: { color: '#333' },
+                        ticks: { color: '#aaa', stepSize: 20, callback: (value) => value + '%' }
+                    },
+                    x: { grid: { display: false }, ticks: { color: '#aaa', maxRotation: 0, autoSkip: true, maxTicksLimit: 5 } }
                 },
                 plugins: { legend: { display: false } }
             }

@@ -11,18 +11,26 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WHITE_V_MIN = 150          # 髪色が一様なときの白髪しきい値（明度 0〜255）
 MIN_CLASS_SEPARATION = 60  # Otsu の2クラス平均差がこれ未満なら一様とみなす
 OTSU_MIN, OTSU_MAX = 120, 180
+MIN_HAIR_SAMPLES = 100
+TEXTURE_STD_MIN = 4.0
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
+
+class AnalysisError(Exception):
+    """判定不能。メッセージをそのまま利用者に返す。"""
 
 def _analyze_white_hair_ratio(img):
     """中心ROI内の髪画素のみを対象に、Otsu適応閾値で白髪率を算出する。"""
     h, w = img.shape[:2]
-    scale = min(640 / w, 640 / h)
+    scale = min(1.0, 640 / w, 640 / h)
     if scale < 1:
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+        img = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
         h, w = img.shape[:2]
 
     roi_y1, roi_y2 = int(h * 0.15), int(h * 0.70)
     roi_x1, roi_x2 = int(w * 0.125), int(w * 0.875)
     roi = img[roi_y1:roi_y2, roi_x1:roi_x2]
+    if roi.size == 0:
+        raise AnalysisError('髪を検出できませんでした。髪が画面中央に大きく写るように撮り直してください')
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     hue, sat, val = cv2.split(hsv)
@@ -30,9 +38,24 @@ def _analyze_white_hair_ratio(img):
     skin = (hue <= 25) & (sat >= 25) & (sat <= 165) & (val >= 75) & (val <= 230)
     hair_mask = (sat <= 102) & ~skin
 
-    v_values = val[hair_mask]
-    if len(v_values) < 100:
-        return 0.0
+    # 毛筋のない平坦な領域（白い壁など）は白髪と色だけでは区別できない
+    full_val = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, :, 2].astype(np.float32)
+    mean = cv2.blur(full_val, (7, 7))
+    mean_sq = cv2.blur(full_val * full_val, (7, 7))
+    std = np.sqrt(np.maximum(mean_sq - mean * mean, 0))
+    textured = hair_mask & (std[roi_y1:roi_y2, roi_x1:roi_x2] >= TEXTURE_STD_MIN)
+
+    all_count = int(hair_mask.sum())
+    tex_count = int(textured.sum())
+    if all_count < MIN_HAIR_SAMPLES:
+        raise AnalysisError('髪を検出できませんでした。髪が画面中央に大きく写るように撮り直してください')
+    if tex_count < MIN_HAIR_SAMPLES and tex_count * 20 < all_count:
+        raise AnalysisError('髪の質感を検出できませんでした。毛筋が分かる明るさで、画面中央に髪を大きく撮ってください')
+
+    use_mask = textured if tex_count >= MIN_HAIR_SAMPLES else hair_mask
+    v_values = val[use_mask]
+    if len(v_values) < MIN_HAIR_SAMPLES:
+        raise AnalysisError('髪を検出できませんでした。髪が画面中央に大きく写るように撮り直してください')
 
     hist = cv2.calcHist([v_values], [0], None, [256], [0, 256]).flatten()
     total = len(v_values)
@@ -63,8 +86,8 @@ def _analyze_white_hair_ratio(img):
     else:
         threshold = min(OTSU_MAX, max(OTSU_MIN, threshold))
 
-    white = hair_mask & (val >= threshold)
-    dark = hair_mask & (val < threshold)
+    white = use_mask & (val >= threshold)
+    dark = use_mask & (val < threshold)
     hair_total = int(white.sum()) + int(dark.sum())
     if hair_total == 0:
         return 0.0
@@ -124,6 +147,8 @@ def analyze():
             return jsonify({'error': '画像が選択されていません'}), 400
         
         data = file.read()
+        if len(data) > MAX_IMAGE_BYTES:
+            return jsonify({'error': '画像が大きすぎます。25MB以下の写真を選んでください'}), 400
         nparr = np.frombuffer(data, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
@@ -144,10 +169,13 @@ def analyze():
         if img is None:
             return jsonify({'error': '画像を読み込めません。JPEGまたはPNG形式で撮影してください'}), 400
 
-        ratio = _analyze_white_hair_ratio(img)
+        try:
+            ratio = _analyze_white_hair_ratio(img)
+        except AnalysisError as err:
+            return jsonify({'error': str(err)}), 400
         return jsonify({'ratio': ratio})
-    except Exception as e:
-        return jsonify({'error': f'処理中にエラーが発生しました: {str(e)}'}), 500
+    except Exception:
+        return jsonify({'error': '処理中にエラーが発生しました'}), 500
 
 @app.route('/manifest.json')
 def manifest():
