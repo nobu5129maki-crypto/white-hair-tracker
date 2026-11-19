@@ -3,4 +3,7 @@ __pycache__/
 .vercel
 .env*
 node_modules/
+*.htpasswd
+config.php
+*.pem
 
